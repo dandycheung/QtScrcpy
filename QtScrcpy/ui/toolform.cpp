@@ -3,16 +3,19 @@
 #include <QMouseEvent>
 #include <QShowEvent>
 
-#include "device.h"
 #include "iconhelper.h"
 #include "toolform.h"
 #include "ui_toolform.h"
+#include "videoform.h"
+#include "../groupcontroller/groupcontroller.h"
 
 ToolForm::ToolForm(QWidget *adsorbWidget, AdsorbPositions adsorbPos) : MagneticWidget(adsorbWidget, adsorbPos), ui(new Ui::ToolForm)
 {
     ui->setupUi(this);
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
     //setWindowFlags(windowFlags() & ~Qt::WindowMinMaxButtonsHint);
+
+    updateGroupControl();
 
     initStyle();
 }
@@ -22,13 +25,14 @@ ToolForm::~ToolForm()
     delete ui;
 }
 
-void ToolForm::setDevice(Device *device)
+void ToolForm::setSerial(const QString &serial)
 {
-    if (!device) {
-        return;
-    }
-    m_device = device;
-    connect(m_device, &Device::controlStateChange, this, &ToolForm::onControlStateChange);
+    m_serial = serial;
+}
+
+bool ToolForm::isHost()
+{
+    return m_isHost;
 }
 
 void ToolForm::initStyle()
@@ -52,20 +56,13 @@ void ToolForm::initStyle()
 
 void ToolForm::updateGroupControl()
 {
-    if (!m_device) {
-        return;
-    }
-    switch (m_device->controlState()) {
-    case Device::GroupControlState::GCS_FREE:
-        ui->groupControlBtn->setStyleSheet("color: #DCDCDC");
-        break;
-    case Device::GroupControlState::GCS_HOST:
+    if (m_isHost) {
         ui->groupControlBtn->setStyleSheet("color: red");
-        break;
-    case Device::GroupControlState::GCS_CLIENT:
+    } else {
         ui->groupControlBtn->setStyleSheet("color: green");
-        break;
     }
+
+    GroupController::instance().updateDeviceState(m_serial);
 }
 
 void ToolForm::mousePressEvent(QMouseEvent *event)
@@ -103,129 +100,126 @@ void ToolForm::hideEvent(QHideEvent *event)
 
 void ToolForm::on_fullScreenBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
 
-    emit m_device->switchFullScreen();
+    dynamic_cast<VideoForm*>(parent())->switchFullScreen();
 }
 
 void ToolForm::on_returnBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postGoBack();
+    device->postGoBack();
 }
 
 void ToolForm::on_homeBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postGoHome();
+    device->postGoHome();
 }
 
 void ToolForm::on_menuBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postGoMenu();
+    device->postGoMenu();
 }
 
 void ToolForm::on_appSwitchBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postAppSwitch();
+    device->postAppSwitch();
 }
 
 void ToolForm::on_powerBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postPower();
+    device->postPower();
 }
 
 void ToolForm::on_screenShotBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->screenshot();
+    device->screenshot();
 }
 
 void ToolForm::on_volumeUpBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postVolumeUp();
+    device->postVolumeUp();
 }
 
 void ToolForm::on_volumeDownBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->postVolumeDown();
+    device->postVolumeDown();
 }
 
 void ToolForm::on_closeScreenBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->setScreenPowerMode(ControlMsg::SPM_OFF);
+    device->setScreenPowerMode(false);
 }
 
 void ToolForm::on_expandNotifyBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->expandNotificationPanel();
+    device->expandNotificationPanel();
 }
 
 void ToolForm::on_touchBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
 
     m_showTouch = !m_showTouch;
-    emit m_device->showTouch(m_showTouch);
+    device->showTouch(m_showTouch);
 }
 
 void ToolForm::on_groupControlBtn_clicked()
 {
-    if (!m_device) {
-        return;
-    }
-    Device::GroupControlState state = m_device->controlState();
-    if (state == Device::GroupControlState::GCS_FREE) {
-        emit m_device->setControlState(m_device, Device::GroupControlState::GCS_HOST);
-    }
-    if (state == Device::GroupControlState::GCS_HOST) {
-        emit m_device->setControlState(m_device, Device::GroupControlState::GCS_FREE);
-    }
-}
-
-void ToolForm::onControlStateChange(Device *device, Device::GroupControlState oldState, Device::GroupControlState newState)
-{
-    Q_UNUSED(device)
-    Q_UNUSED(oldState)
-    Q_UNUSED(newState)
+    m_isHost = !m_isHost;
     updateGroupControl();
 }
 
 void ToolForm::on_openScreenBtn_clicked()
 {
-    if (!m_device) {
+    auto device = qsc::IDeviceManage::getInstance().getDevice(m_serial);
+    if (!device) {
         return;
     }
-    emit m_device->setScreenPowerMode(ControlMsg::SPM_NORMAL);
+    device->setScreenPowerMode(true);
 }

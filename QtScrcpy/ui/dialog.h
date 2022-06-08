@@ -10,7 +10,7 @@
 
 
 #include "adbprocess.h"
-#include "devicemanage.h"
+#include "../QtScrcpyCore/include/QtScrcpyCore.h"
 
 namespace Ui
 {
@@ -31,6 +31,9 @@ public:
     void getIPbyIp();
 
 private slots:
+    void onDeviceConnected(bool success, const QString& serial, const QString& deviceName, const QSize& size);
+    void onDeviceDisconnected(QString serial);
+
     void on_updateDevice_clicked();
     void on_startServerBtn_clicked();
     void on_stopServerBtn_clicked();
@@ -72,8 +75,7 @@ protected:
 
 private:
     Ui::Dialog *ui;
-    AdbProcess m_adb;
-    DeviceManage m_deviceManage;
+    qsc::AdbProcess m_adb;
     QSystemTrayIcon *m_hideIcon;
     QMenu *m_menu;
     QAction *m_showWindow;

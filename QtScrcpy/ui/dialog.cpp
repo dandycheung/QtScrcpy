@@ -6,39 +6,52 @@
 #include <QTimer>
 
 #include "config.h"
-#include "device.h"
 #include "dialog.h"
-#include "keymap.h"
 #include "ui_dialog.h"
 #include "videoform.h"
+#include "../groupcontroller/groupcontroller.h"
+
+QString s_keyMapPath = "";
+
+const QString &getKeyMapPath()
+{
+    if (s_keyMapPath.isEmpty()) {
+        s_keyMapPath = QString::fromLocal8Bit(qgetenv("QTSCRCPY_KEYMAP_PATH"));
+        QFileInfo fileInfo(s_keyMapPath);
+        if (s_keyMapPath.isEmpty() || !fileInfo.isDir()) {
+            s_keyMapPath = QCoreApplication::applicationDirPath() + "/keymap";
+        }
+    }
+    return s_keyMapPath;
+}
 
 Dialog::Dialog(QWidget *parent) : QDialog(parent), ui(new Ui::Dialog)
 {
     ui->setupUi(this);
     initUI();
 
-    connect(&m_adb, &AdbProcess::adbProcessResult, this, [this](AdbProcess::ADB_EXEC_RESULT processResult) {
+    connect(&m_adb, &qsc::AdbProcess::adbProcessResult, this, [this](qsc::AdbProcess::ADB_EXEC_RESULT processResult) {
         QString log = "";
         bool newLine = true;
         QStringList args = m_adb.arguments();
 
         switch (processResult) {
-        case AdbProcess::AER_ERROR_START:
+        case qsc::AdbProcess::AER_ERROR_START:
             break;
-        case AdbProcess::AER_SUCCESS_START:
+        case qsc::AdbProcess::AER_SUCCESS_START:
             log = "adb run";
             newLine = false;
             break;
-        case AdbProcess::AER_ERROR_EXEC:
+        case qsc::AdbProcess::AER_ERROR_EXEC:
             //log = m_adb.getErrorOut();
             if (args.contains("ifconfig") && args.contains("wlan0")) {
                 getIPbyIp();
             }
             break;
-        case AdbProcess::AER_ERROR_MISSING_BINARY:
+        case qsc::AdbProcess::AER_ERROR_MISSING_BINARY:
             log = "adb not found";
             break;
-        case AdbProcess::AER_SUCCESS_EXEC:
+        case qsc::AdbProcess::AER_SUCCESS_EXEC:
             //log = m_adb.getStdOut();
             if (args.contains("devices")) {
                 QStringList devices = m_adb.getDevicesSerialFromStdOut();
@@ -94,13 +107,16 @@ Dialog::Dialog(QWidget *parent) : QDialog(parent), ui(new Ui::Dialog)
         qApp->quit();
     });
     connect(m_hideIcon, &QSystemTrayIcon::activated, this, &Dialog::slotActivated);
+
+    connect(&qsc::IDeviceManage::getInstance(), &qsc::IDeviceManage::deviceConnected, this, &Dialog::onDeviceConnected);
+    connect(&qsc::IDeviceManage::getInstance(), &qsc::IDeviceManage::deviceDisconnected, this, &Dialog::onDeviceDisconnected);
 }
 
 Dialog::~Dialog()
 {
     qDebug() << "~Dialog()";
     updateBootConfig(false);
-    m_deviceManage.disconnectAllDevice();
+    qsc::IDeviceManage::getInstance().disconnectAllDevice();
     delete ui;
 }
 
@@ -211,7 +227,7 @@ void Dialog::delayMs(int ms)
 
 QString Dialog::getGameScript(const QString &fileName)
 {
-    QFile loadFile(KeyMap::getKeyMapPath() + "/" + fileName);
+    QFile loadFile(getKeyMapPath() + "/" + fileName);
     if (!loadFile.open(QIODevice::ReadOnly)) {
         outLog("open file failed:" + fileName, true);
         return "";
@@ -262,50 +278,37 @@ void Dialog::on_startServerBtn_clicked()
 {
     outLog("start server...", false);
 
-    QString absFilePath;
-    if (ui->recordScreenCheck->isChecked()) {
-        QString fileDir(ui->recordPathEdt->text().trimmed());
-        if (!fileDir.isEmpty()) {
-            QDateTime dateTime = QDateTime::currentDateTime();
-            QString fileName = dateTime.toString("_yyyyMMdd_hhmmss_zzz");
-            QString ext = ui->formatBox->currentText().trimmed();
-            fileName = windowTitle() + fileName + "." + ext;
-            QDir dir(fileDir);
-            absFilePath = dir.absoluteFilePath(fileName);
-        }
-    }
-
     // this is ok that "native" toUshort is 0
     quint16 videoSize = ui->maxSizeBox->currentText().trimmed().toUShort();
-    Device::DeviceParams params;
+    qsc::DeviceParams params;
     params.serial = ui->serialBox->currentText().trimmed();
     params.maxSize = videoSize;
     params.bitRate = getBitRate();
     // on devices with Android >= 10, the capture frame rate can be limited
     params.maxFps = static_cast<quint32>(Config::getInstance().getMaxFps());
-    params.recordFileName = absFilePath;
     params.closeScreen = ui->closeScreenCheck->isChecked();
     params.useReverse = ui->useReverseCheck->isChecked();
     params.display = !ui->notDisplayCheck->isChecked();
     params.renderExpiredFrames = Config::getInstance().getRenderExpiredFrames();
     params.lockVideoOrientation = ui->lockOrientationBox->currentIndex() - 1;
     params.stayAwake = ui->stayAwakeCheck->isChecked();
-    params.framelessWindow = ui->framelessCheck->isChecked();
     params.recordPath = ui->recordPathEdt->text().trimmed();
+    params.recordFileFormat = ui->formatBox->currentText().trimmed();
     params.serverLocalPath = getServerPath();
     params.serverRemotePath = Config::getInstance().getServerPath();
+    params.pushFilePath = Config::getInstance().getPushFilePath();
+    params.gameScript = getGameScript(ui->gameBox->currentText());
+    params.serverVersion = Config::getInstance().getServerVersion();
+    params.logLevel = Config::getInstance().getLogLevel();
+    params.codecOptions = Config::getInstance().getCodecOptions();
+    params.codecName = Config::getInstance().getCodecName();
 
-    m_deviceManage.connectDevice(params);
-
-    if (ui->alwaysTopCheck->isChecked()) {
-        m_deviceManage.staysOnTop(params.serial);
-    }
-    m_deviceManage.showFPS(params.serial, ui->fpsCheck->isChecked());
+    qsc::IDeviceManage::getInstance().connectDevice(params);
 }
 
 void Dialog::on_stopServerBtn_clicked()
 {
-    if (m_deviceManage.disconnectDevice(ui->serialBox->currentText().trimmed())) {
+    if (qsc::IDeviceManage::getInstance().disconnectDevice(ui->serialBox->currentText().trimmed())) {
         outLog("stop server");
     }
 }
@@ -418,6 +421,59 @@ void Dialog::getIPbyIp()
     m_adb.execute(ui->serialBox->currentText().trimmed(), adbArgs);
 }
 
+void Dialog::onDeviceConnected(bool success, const QString &serial, const QString &deviceName, const QSize &size)
+{
+    Q_UNUSED(deviceName);
+    if (!success) {
+        return;
+    }
+
+    auto videoForm = new VideoForm(ui->framelessCheck->isChecked(), Config::getInstance().getSkin());
+    videoForm->setSerial(serial);
+
+    qsc::IDeviceManage::getInstance().getDevice(serial)->setUserData(static_cast<void*>(videoForm));
+    qsc::IDeviceManage::getInstance().getDevice(serial)->registerDeviceObserver(videoForm);
+
+    videoForm->showFPS(ui->fpsCheck->isChecked());
+    if (ui->alwaysTopCheck->isChecked()) {
+        videoForm->staysOnTop();
+    }
+
+    // must be show before updateShowSize
+    videoForm->show();
+    QString name = Config::getInstance().getNickName(serial);
+    if (name.isEmpty()) {
+        name = Config::getInstance().getTitle();
+    }
+    videoForm->setWindowTitle(name + "-" + serial);
+    videoForm->updateShowSize(size);
+
+    bool deviceVer = size.height() > size.width();
+    QRect rc = Config::getInstance().getRect(serial);
+    bool rcVer = rc.height() > rc.width();
+    // same width/height rate
+    if (rc.isValid() && (deviceVer == rcVer)) {
+        // mark: resize is for fix setGeometry magneticwidget bug
+        videoForm->resize(rc.size());
+        videoForm->setGeometry(rc);
+    }
+
+    GroupController::instance().addDevice(serial);
+}
+
+void Dialog::onDeviceDisconnected(QString serial)
+{
+    GroupController::instance().removeDevice(serial);
+
+    auto data = qsc::IDeviceManage::getInstance().getDevice(serial)->getUserData();
+    if (data) {
+        VideoForm* vf = static_cast<VideoForm*>(data);
+        qsc::IDeviceManage::getInstance().getDevice(serial)->deRegisterDeviceObserver(vf);
+        vf->close();
+        vf->deleteLater();
+    }
+}
+
 void Dialog::on_wirelessDisConnectBtn_clicked()
 {
     if (checkAdbRun()) {
@@ -461,13 +517,13 @@ void Dialog::on_clearOut_clicked()
 
 void Dialog::on_stopAllServerBtn_clicked()
 {
-    m_deviceManage.disconnectAllDevice();
+    qsc::IDeviceManage::getInstance().disconnectAllDevice();
 }
 
 void Dialog::on_refreshGameScriptBtn_clicked()
 {
     ui->gameBox->clear();
-    QDir dir(KeyMap::getKeyMapPath());
+    QDir dir(getKeyMapPath());
     if (!dir.exists()) {
         outLog("keymap directory not find", true);
         return;
@@ -484,7 +540,13 @@ void Dialog::on_refreshGameScriptBtn_clicked()
 
 void Dialog::on_applyScriptBtn_clicked()
 {
-    m_deviceManage.updateScript(getGameScript(ui->gameBox->currentText()));
+    auto curSerial = ui->serialBox->currentText().trimmed();
+    auto device = qsc::IDeviceManage::getInstance().getDevice(curSerial);
+    if (!device) {
+        return;
+    }
+
+    device->updateScript(getGameScript(ui->gameBox->currentText()));
 }
 
 void Dialog::on_recordScreenCheck_clicked(bool checked)
@@ -600,9 +662,7 @@ void Dialog::on_useSingleModeCheck_clicked()
         ui->rightWidget->show();
     }
 
-    QTimer::singleShot(0, this, [this]() {
-        resize(layout()->sizeHint().width(), height());
-    });
+    resize(layout()->sizeHint().width(), height());
 }
 
 void Dialog::on_serialBox_currentIndexChanged(const QString &arg1)
